@@ -1,50 +1,10 @@
-/* USER CODE BEGIN Header */
-/**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2023 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
-/* USER CODE END Header */
-/* Includes ------------------------------------------------------------------*/
-#include "main.h"
-
-/* Private includes ----------------------------------------------------------*/
-/* USER CODE BEGIN Includes */
-
-/* USER CODE END Includes */
-
-/* Private typedef -----------------------------------------------------------*/
-/* USER CODE BEGIN PTD */
-
-/* USER CODE END PTD */
-
-/* Private define ------------------------------------------------------------*/
-/* USER CODE BEGIN PD */
-
-/* USER CODE END PD */
-
-/* Private macro -------------------------------------------------------------*/
-/* USER CODE BEGIN PM */
-
-/* USER CODE END PM */
+#pragma GCC diagnostic push
+# pragma GCC diagnostic ignored "-Wvolatile"
+# include "main.h"
+#pragma GCC diagnostic pop
 
 /* Private variables ---------------------------------------------------------*/
 UART_HandleTypeDef huart2;
-
-/* USER CODE BEGIN PV */
-
-/* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
@@ -59,24 +19,38 @@ static void MX_USART2_UART_Init(void);
 
 /* USER CODE END 0 */
 
-/**
-  * @brief  The application entry point.
-  * @retval int
-  */
-int main(void)
-{
-  /* USER CODE BEGIN 1 */
+inline decltype (auto) set(uint32_t volatile& reg, uint32_t val) {
+    return const_cast<uint32_t&>(reg) |= val;
+    // auto& ret = const_cast<uint32_t&>(reg) |= val;
+    // while (val != (ret & val)) continue;
+    // return ret;
+}
 
-  /* USER CODE END 1 */
+int main() {
+    // Reset of all peripherals, initializes the flash interface and sys-tick.
+    //  - Enable the flash instruction cache.
+    set(FLASH->ACR, FLASH_ACR_ICEN);
+    //  - Enable data cache.
+    set(FLASH->ACR, FLASH_ACR_DCEN);
+    //  - Enable pre-fetch buffer.
+    set(FLASH->ACR, FLASH_ACR_PRFTEN);
 
-  /* MCU Configuration--------------------------------------------------------*/
+    //  - Set interrupt group priority.
+    NVIC_SetPriorityGrouping(NVIC_PRIORITYGROUP_4);
 
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
+    //  - Use sys-tick as time base source and configure 1ms tick.
+    constexpr uint32_t SYSTEM_CORE_CLOCK = 16'000'000ul;
+    constexpr uint32_t TICKS = SYSTEM_CORE_CLOCK / 1'000ul;
+    static_assert(TICKS < SysTick_LOAD_RELOAD_Msk);
+    SysTick_Config(TICKS);
 
-  /* USER CODE BEGIN Init */
+    constexpr uint32_t TICK_PRIORITY = 0;
+    constexpr uint32_t TICK_PRIORITY_SUB = 0;
+    static_assert(TICK_PRIORITY < (1ul << __NVIC_PRIO_BITS));
+    NVIC_SetPriority(SysTick_IRQn,
+                     NVIC_EncodePriority(NVIC_GetPriorityGrouping(), TICK_PRIORITY, TICK_PRIORITY_SUB));
 
-  /* USER CODE END Init */
+
 
   /* Configure the system clock */
   SystemClock_Config();
@@ -96,6 +70,8 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    HAL_Delay(100);
+    HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -114,7 +90,7 @@ void SystemClock_Config(void)
 
   /** Configure the main internal regulator output voltage
   */
-  __HAL_RCC_PWR_CLK_ENABLE();
+  set(RCC->APB1ENR, RCC_APB1ENR_PWREN);
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
   /** Initializes the RCC Oscillators according to the specified parameters
@@ -194,13 +170,13 @@ static void MX_GPIO_Init(void)
 /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  __HAL_RCC_GPIOH_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
+  set(RCC->AHB1ENR, RCC_AHB1ENR_GPIOCEN);
+  set(RCC->AHB1ENR, RCC_AHB1ENR_GPIOHEN);
+  set(RCC->AHB1ENR, RCC_AHB1ENR_GPIOAEN);
+  set(RCC->AHB1ENR, RCC_AHB1ENR_GPIOBEN);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+  LD2_GPIO_Port->BSRR = LD2_Pin; // Reset
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -237,20 +213,3 @@ void Error_Handler(void)
   }
   /* USER CODE END Error_Handler_Debug */
 }
-
-#ifdef  USE_FULL_ASSERT
-/**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
-void assert_failed(uint8_t *file, uint32_t line)
-{
-  /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-  /* USER CODE END 6 */
-}
-#endif /* USE_FULL_ASSERT */
