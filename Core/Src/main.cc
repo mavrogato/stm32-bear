@@ -3,6 +3,47 @@
 # include "main.h"
 #pragma GCC diagnostic pop
 
+#include <bit>
+#include <limits>
+#include <cstdio>
+
+
+extern "C" int __io_putchar(int ch) { return ITM_SendChar(ch); }
+
+inline constexpr auto WORD_BITS = std::numeric_limits<uint32_t>::digits;
+static_assert(sizeof (uint32_t) == 4);
+static_assert(sizeof (void*) == 4);
+static_assert(WORD_BITS == 32);
+
+namespace SFR
+{
+    template <uint32_t... Args>
+    constexpr void set(uint32_t volatile& reg) noexcept {
+        static_assert(0 < sizeof... (Args));
+        static_assert((std::has_single_bit(Args) && ...));
+        static_assert(sizeof... (Args) == std::popcount((Args | ...)));
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wvolatile"
+        reg |= (Args | ...);
+#pragma GCC diagnostic pop
+    }
+
+    template <uint32_t... Args>
+    constexpr void set_seq(uint32_t volatile& reg) noexcept {
+        static_assert(0 < sizeof... (Args));
+        static_assert((std::has_single_bit(Args) && ...));
+        static_assert(sizeof... (Args) == std::popcount((Args | ...)));
+        ([](uint32_t volatile& reg) noexcept {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wvolatile"
+            reg |= Args;
+#pragma GCC diagnostic pop
+            auto tmp = reg & Args;
+            (void) tmp;
+        }(reg), ...);
+    }
+}
+
 /* Private variables ---------------------------------------------------------*/
 UART_HandleTypeDef huart2;
 
@@ -19,30 +60,17 @@ static void MX_USART2_UART_Init(void);
 
 /* USER CODE END 0 */
 
-inline decltype (auto) set(uint32_t volatile& reg, uint32_t val) {
-    return const_cast<uint32_t&>(reg) |= val;
-    // auto& ret = const_cast<uint32_t&>(reg) |= val;
-    // while (val != (ret & val)) continue;
-    // return ret;
-}
 
 int main() {
-    // Reset of all peripherals, initializes the flash interface and sys-tick.
-    //  - Enable the flash instruction cache.
-    set(FLASH->ACR, FLASH_ACR_ICEN);
-    //  - Enable data cache.
-    set(FLASH->ACR, FLASH_ACR_DCEN);
-    //  - Enable pre-fetch buffer.
-    set(FLASH->ACR, FLASH_ACR_PRFTEN);
+    // Enable the flash instruction cache, data cache, and pre-fetch buffer.
+    SFR::set<FLASH_ACR_ICEN, FLASH_ACR_DCEN, FLASH_ACR_PRFTEN>(FLASH->ACR);
 
     //  - Set interrupt group priority.
     NVIC_SetPriorityGrouping(NVIC_PRIORITYGROUP_4);
 
     //  - Use sys-tick as time base source and configure 1ms tick.
-    constexpr uint32_t SYSTEM_CORE_CLOCK = 16'000'000ul;
-    constexpr uint32_t TICKS = SYSTEM_CORE_CLOCK / 1'000ul;
-    static_assert(TICKS < SysTick_LOAD_RELOAD_Msk);
-    SysTick_Config(TICKS);
+    constexpr uint32_t TICKS_DIV = 1'000ul;
+    SysTick_Config(SystemCoreClock / TICKS_DIV);
 
     constexpr uint32_t TICK_PRIORITY = 0;
     constexpr uint32_t TICK_PRIORITY_SUB = 0;
@@ -70,6 +98,7 @@ int main() {
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+      printf("Hello\n");
     HAL_Delay(100);
     HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
     /* USER CODE END WHILE */
@@ -90,7 +119,7 @@ void SystemClock_Config(void)
 
   /** Configure the main internal regulator output voltage
   */
-  set(RCC->APB1ENR, RCC_APB1ENR_PWREN);
+  SFR::set<RCC_APB1ENR_PWREN>(RCC->APB1ENR);
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
   /** Initializes the RCC Oscillators according to the specified parameters
@@ -170,10 +199,7 @@ static void MX_GPIO_Init(void)
 /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
-  set(RCC->AHB1ENR, RCC_AHB1ENR_GPIOCEN);
-  set(RCC->AHB1ENR, RCC_AHB1ENR_GPIOHEN);
-  set(RCC->AHB1ENR, RCC_AHB1ENR_GPIOAEN);
-  set(RCC->AHB1ENR, RCC_AHB1ENR_GPIOBEN);
+  SFR::set_seq<RCC_AHB1ENR_GPIOCEN, RCC_AHB1ENR_GPIOHEN, RCC_AHB1ENR_GPIOAEN, RCC_AHB1ENR_GPIOBEN>(RCC->AHB1ENR);
 
   /*Configure GPIO pin Output Level */
   LD2_GPIO_Port->BSRR = LD2_Pin; // Reset
