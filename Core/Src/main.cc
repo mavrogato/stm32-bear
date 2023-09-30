@@ -5,6 +5,7 @@
 
 #include <bit>
 #include <limits>
+#include <array>
 #include <cstdio>
 
 
@@ -14,34 +15,56 @@ inline constexpr auto WORD_BITS = std::numeric_limits<uint32_t>::digits;
 static_assert(sizeof (uint32_t) == 4);
 static_assert(sizeof (void*) == 4);
 static_assert(WORD_BITS == 32);
+static_assert(sizeof (uint8_t) == 1);
+static_assert(std::numeric_limits<uint8_t>::digits == 8);
 
 namespace SFR
 {
-    template <uint32_t... Args>
-    constexpr void set(uint32_t volatile& reg) noexcept {
-        static_assert(0 < sizeof... (Args));
-        static_assert((std::has_single_bit(Args) && ...));
-        static_assert(sizeof... (Args) == std::popcount((Args | ...)));
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wvolatile"
-        reg |= (Args | ...);
-#pragma GCC diagnostic pop
+    constexpr bool is_continual_pop(uint32_t mask) {
+        return WORD_BITS == std::countl_zero(mask) + std::popcount(mask) + std::countr_zero(mask);
+    }
+
+    inline void set_and_delay(uint32_t volatile& reg, uint32_t bit) noexcept {
+        reg = reg | bit;
+        auto tmp = reg & bit;
+        (void) tmp;
     }
 
     template <uint32_t... Args>
-    constexpr void set_seq(uint32_t volatile& reg) noexcept {
+    class bits {
         static_assert(0 < sizeof... (Args));
         static_assert((std::has_single_bit(Args) && ...));
         static_assert(sizeof... (Args) == std::popcount((Args | ...)));
-        ([](uint32_t volatile& reg) noexcept {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wvolatile"
-            reg |= Args;
-#pragma GCC diagnostic pop
-            auto tmp = reg & Args;
+
+    public:
+        static constexpr void apply(uint32_t volatile& reg) noexcept {
+            reg = reg | (Args | ...);
+        }
+        static constexpr void apply_seq(uint32_t volatile& reg) noexcept {
+            (set_and_delay(reg, Args), ...);
+        }
+    };
+
+    template <uint32_t Mask, uint32_t Val>
+    class field {
+        static_assert(0 < std::popcount(Mask));
+        static_assert(0 == (~Mask & Val));
+        static_assert(is_continual_pop(Mask));
+
+    public:
+        static constexpr uint32_t mask_value = Mask;
+
+    public:
+        static constexpr void apply(uint32_t volatile& reg) noexcept {
+            reg = (reg & ~Mask) | Val;
+        }
+        static constexpr void apply_seq(uint32_t volatile& reg) noexcept {
+            apply(reg);
+            auto tmp = reg & Mask;
             (void) tmp;
-        }(reg), ...);
-    }
+        }
+    };
+
 }
 
 /* Private variables ---------------------------------------------------------*/
@@ -63,7 +86,7 @@ static void MX_USART2_UART_Init(void);
 
 int main() {
     // Enable the flash instruction cache, data cache, and pre-fetch buffer.
-    SFR::set<FLASH_ACR_ICEN, FLASH_ACR_DCEN, FLASH_ACR_PRFTEN>(FLASH->ACR);
+    SFR::bits<FLASH_ACR_ICEN, FLASH_ACR_DCEN, FLASH_ACR_PRFTEN>::apply(FLASH->ACR);
 
     //  - Set interrupt group priority.
     NVIC_SetPriorityGrouping(NVIC_PRIORITYGROUP_4);
@@ -78,6 +101,23 @@ int main() {
     NVIC_SetPriority(SysTick_IRQn,
                      NVIC_EncodePriority(NVIC_GetPriorityGrouping(), TICK_PRIORITY, TICK_PRIORITY_SUB));
 
+    SFR::bits<RCC_APB1ENR_PWREN>::apply_seq(RCC->APB1ENR);
+    SFR::field<PWR_CR_VOS, PWR_CR_VOS_0 | PWR_CR_VOS_1>::apply_seq(PWR->CR);
+
+    SFR::field<RCC_CR_HSITRIM, RCC_CR_HSITRIM_4>::apply(RCC->CR);
+
+    //(*(volatile uint32_t *) (0x42000000UL + (((((0x40000000UL + 0x00020000UL) + 0x3800UL) - 0x40000000UL) + 0x00U) * 32U) + (0x18U * 4U)) = DISABLE)
+    __HAL_RCC_PLL_DISABLE();
+    (((((((((uint8_t)0x39)) >> 5U) == 1U)? ((RCC_TypeDef *) ((0x40000000UL + 0x00020000UL) + 0x3800UL))->CR :((((((uint8_t)0x39)) >> 5U) == 2U) ? ((RCC_TypeDef *) ((0x40000000UL + 0x00020000UL) + 0x3800UL))->BDCR :((((((uint8_t)0x39)) >> 5U) == 3U)? ((RCC_TypeDef *) ((0x40000000UL + 0x00020000UL) + 0x3800UL))->CSR :((RCC_TypeDef *) ((0x40000000UL + 0x00020000UL) + 0x3800UL))->CIR))) & (1U << ((((uint8_t)0x39)) & ((uint8_t)0x1FU))))!= 0U)? 1U : 0U)
+    while (__HAL_RCC_GET_FLAG(RCC_FLAG_PLLRDY) != RESET) continue;
+    RCC->PLLCFGR =
+            RCC_PLLSOURCE_HSI |
+            16 |
+            (336 << RCC_PLLCFGR_PLLN_Pos) |
+            (((RCC_PLLP_DIV4 >> 1U) - 1U) << RCC_PLLCFGR_PLLP_Pos) |
+            (4 << RCC_PLLCFGR_PLLQ_Pos);
+    __HAL_RCC_PLL_ENABLE();
+    while(__HAL_RCC_GET_FLAG(RCC_FLAG_PLLRDY) == RESET) continue;
 
 
   /* Configure the system clock */
@@ -114,33 +154,33 @@ int main() {
   */
 void SystemClock_Config(void)
 {
-  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
   /** Configure the main internal regulator output voltage
   */
-  SFR::set<RCC_APB1ENR_PWREN>(RCC->APB1ENR);
-  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+//  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLM = 16;
-  RCC_OscInitStruct.PLL.PLLN = 336;
-  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
-  RCC_OscInitStruct.PLL.PLLQ = 4;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
+//  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+//  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+//  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+//  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+//  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+//  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+//  RCC_OscInitStruct.PLL.PLLM = 16;
+//  RCC_OscInitStruct.PLL.PLLN = 336;
+//  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
+//  RCC_OscInitStruct.PLL.PLLQ = 4;
+//  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+//  {
+//    Error_Handler();
+//  }
+
 
   /** Initializes the CPU, AHB and APB buses clocks
   */
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
@@ -199,7 +239,7 @@ static void MX_GPIO_Init(void)
 /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
-  SFR::set_seq<RCC_AHB1ENR_GPIOCEN, RCC_AHB1ENR_GPIOHEN, RCC_AHB1ENR_GPIOAEN, RCC_AHB1ENR_GPIOBEN>(RCC->AHB1ENR);
+  SFR::bits<RCC_AHB1ENR_GPIOCEN, RCC_AHB1ENR_GPIOHEN, RCC_AHB1ENR_GPIOAEN, RCC_AHB1ENR_GPIOBEN>::apply_seq(RCC->AHB1ENR);
 
   /*Configure GPIO pin Output Level */
   LD2_GPIO_Port->BSRR = LD2_Pin; // Reset
